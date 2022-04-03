@@ -14,7 +14,8 @@ app.use(express.json());
 app.use(cors());
 
 // DB connection
-const MONGO_URL = process.env.DB_URL;
+const MONGO_URL =
+  "mongodb://localhost:27017/authentication" || process.env.DB_URL;
 
 mongoose
   .connect(MONGO_URL, {
