@@ -3,7 +3,14 @@
 import express from "express";
 const router = express.Router();
 import { check } from "express-validator";
-import { signup, login, logout, verify } from "../controllers/user.js";
+import {
+  signup,
+  login,
+  logout,
+  verify,
+  requestReset,
+  reset,
+} from "../controllers/user.js";
 
 router.post(
   "/signup",
@@ -22,6 +29,10 @@ router.post(
 router.post("/login", login);
 
 router.get("/verify/:userId/:uniqueString", verify);
+
+router.post("/requestPasswordReset", requestReset);
+
+router.post("/resetPassword", reset);
 
 router.get("/logout", logout);
 
