@@ -7,10 +7,12 @@ import { userVerification } from "../models/userVerification.js";
 import { passwordReset } from "../models/passwordReset.js";
 import dotenv from "dotenv";
 dotenv.config();
-import nodemailer from "nodemailer";
+// import nodemailer from "nodemailer";
+import sgMail from "@sendgrid/mail";
+sgMail.setApiKey(process.env.MAIL_API_KEY);
 import { v4 as uuidv4 } from "uuid";
-import { ObjectId } from "mongodb";
 
+// generate hash
 async function genPassword(password) {
   const salt = await bcrypt.genSalt(10); //bcrypt.genSalt(no of salts)
   const hashedPassword = await bcrypt.hash(password, salt);
@@ -18,29 +20,13 @@ async function genPassword(password) {
   return hashedPassword;
 }
 
-let transporter = nodemailer.createTransport({
-  service: "hotmail",
-  auth: {
-    user: process.env.AUTH_EMAIL,
-    pass: process.env.AUTH_PASS,
-  },
-});
-
-transporter.verify((error, success) => {
-  if (error) {
-    console.log(error);
-  } else {
-    console.log("Ready for message");
-    console.log(success);
-  }
-});
-
 async function signup(request, response) {
   const errors = validationResult(request);
   if (!errors.isEmpty()) {
     return response.status(404).send({ message: errors.array()[0].msg });
   }
   const { username, email, password } = request.body;
+  console.log(username, email, password);
   const [userFromDB] = await User.find({ email });
   if (userFromDB) {
     console.log({ message: "User already exist" });
@@ -61,9 +47,53 @@ async function signup(request, response) {
   }
 }
 
+//send verification email
+const sendVerificationEmail = async ({ _id, email }, response) => {
+  //URL to be used in Email
+  console.log(_id, email);
+  const currentURL = "http://localhost:4000/";
+
+  const uniqueString = uuidv4() + _id;
+
+  //mail options
+  const mailOption = {
+    from: process.env.AUTH_EMAIL,
+    to: email,
+    subject: "Verify Your Email",
+    html: `<p>Verify your Email to loginto the account</p>
+            <p>Link <b>expires in 6 hours</b></p>
+            <p>Press <a href=${
+              currentURL + "users/verify/" + _id + "/" + uniqueString
+            }>here</a> to proceed</p>`,
+  };
+  const hashedUniqueString = await genPassword(uniqueString);
+  // console.log(salt, hashedPassword);
+  const newVerification = new userVerification({
+    userId: _id,
+    uniqueString: hashedUniqueString,
+    createdAt: Date.now(),
+    expiresAt: Date.now() + 21600000,
+  });
+  await newVerification
+    .save()
+    .then(() => {
+      sgMail.send(mailOption, (error, info) => {
+        if (error) {
+          response.send({ message: "Unable to send mail error occured" });
+        } else {
+          response.send({ message: "Verification mail sent" });
+        }
+      });
+    })
+    .catch((error) => {
+      console.log(error);
+      response.send({ message: "Could't save verification data" });
+    });
+};
+
 async function login(request, response) {
-  const { username, email, password } = request.body;
-  const [userFromDB] = await User.find({ username });
+  const { email, password } = request.body;
+  const [userFromDB] = await User.find({ email });
   console.log(userFromDB);
   if (userFromDB && userFromDB.verified) {
     const isPasswordMatch = await bcrypt.compare(password, userFromDB.password);
@@ -147,66 +177,7 @@ const logout = async (request, response) => {
   return response.send({ message: "Logout Successful" });
 };
 
-//send verification email
-const sendVerificationEmail = async ({ _id, email }, response) => {
-  //URL to be used in Email
-  console.log(_id, email);
-  const currentURL = "http://localhost:4000/";
-
-  const uniqueString = uuidv4() + _id;
-
-  //mail options
-  const mailOption = {
-    from: process.env.AUTH_EMAIL,
-    to: email,
-    subject: "Verify Your Email",
-    html: `<p>Verify your Email to loginto the account</p>
-            <p>Link <b>expires in 6 hours</b></p>
-            <p>Press <a href=${
-              currentURL + "users/verify/" + _id + "/" + uniqueString
-            }>here</a> to proceed</p>`,
-  };
-  const hashedUniqueString = await genPassword(uniqueString);
-  // console.log(salt, hashedPassword);
-  const newVerification = new userVerification({
-    userId: _id,
-    uniqueString: hashedUniqueString,
-    createdAt: Date.now(),
-    expiresAt: Date.now() + 21600000,
-  });
-  await newVerification
-    .save()
-    .then(() => {
-      transporter
-        .sendMail(mailOption)
-        .then(() => {
-          response.send({
-            status: "PENDING",
-            message: "Verification mail sent",
-          });
-        })
-        .catch((error) => {
-          console.log(error);
-          response.send({ message: "verification mail failed" });
-        });
-    })
-    .catch((error) => {
-      console.log(error);
-      response.send({ message: "Could't save verification data" });
-    });
-};
-
-async function requestReset(request, response) {
-  const { email, redirectUrl } = request.body;
-  const [user] = await User.find({ email });
-  console.log(email, redirectUrl, user);
-  if (user && user.verified) {
-    sendResetEmail(user, redirectUrl, response);
-  } else {
-    response.send({ message: "Account not found to reset password" });
-  }
-}
-
+//send password reset email
 const sendResetEmail = async ({ _id, email }, redirectUrl, response) => {
   const resetString = uuidv4() + _id;
   passwordReset.deleteMany({ userId: _id }).then(() => {
@@ -232,17 +203,16 @@ const sendResetEmail = async ({ _id, email }, redirectUrl, response) => {
       newPasswordRecord
         .save()
         .then(() => {
-          transporter
-            .sendMail(mailOption)
-            .then(() => {
+          sgMail.send(mailOption, (error, info) => {
+            if (error) {
+              response.send({ message: "Error occured while sending mail" });
+            } else {
               response.send({
-                status: "PENDING",
-                message: "Password reset mail sent",
+                message: "Reset mail sent",
+                user: { id: _id, resetString: resetString },
               });
-            })
-            .catch(() => {
-              console.log("mail does not send");
-            });
+            }
+          });
         })
         .catch(() => {
           console.log("resetPassword record does not saved");
@@ -252,53 +222,135 @@ const sendResetEmail = async ({ _id, email }, redirectUrl, response) => {
   });
 };
 
-async function reset(request, response) {
-  const { userId, resetString, newPassword } = request.body;
-
-  const [user] = await passwordReset.find({ userId });
-  const { expiresAt } = user;
-  const isLinkValid = expiresAt > Date.now();
-  if (user) {
-    if (isLinkValid) {
-      const isStringValid = await bcrypt.compare(resetString, user.resetString);
-      if (isStringValid) {
-        const hashedNewPassword = await genPassword(newPassword);
-        User.updateOne({ _id: userId }, { password: hashedNewPassword })
-          .then(() => {
-            passwordReset
-              .deleteOne({ userId })
-              .then(() => {
-                response.send({
-                  message: "Password has been reset successfully",
-                });
-              })
-              .catch(() => {
-                console.log(
-                  "error occured while deleteing password reset request record"
-                );
-                response.send({
-                  message:
-                    "error occured while deleteing password reset request record",
-                });
-              });
-          })
-          .catch(() => {
-            console.log("error occured while updating password");
-            response.send({
-              message: "error occured while updating password",
-            });
-          });
-      } else {
-        response.send({ message: "Reset String is not valid" });
-      }
-    } else {
-      passwordReset.deleteOne({ userId }).then(() => {
-        response.send({ message: "Password reset request expired" });
-      });
-    }
+async function requestReset(request, response) {
+  const { email, redirectUrl } = request.body;
+  const [user] = await User.find({ email });
+  console.log(email, redirectUrl, user);
+  if (user && user.verified) {
+    sendResetEmail(user, redirectUrl, response);
   } else {
-    response.send({ message: "password reset request not found / expired" });
+    response.send({ message: "Account not found to reset password" });
   }
 }
 
-export { signup, login, logout, verify, requestReset, reset };
+// async function reset(request, response) {
+//   const { userId, resetString, newPassword } = request.body;
+
+//   const [user] = await passwordReset.find({ userId });
+//   try {
+//     const { expiresAt } = user;
+//     const isLinkValid = expiresAt > Date.now();
+//     if (user) {
+//       if (isLinkValid) {
+//         const isStringValid = await bcrypt.compare(
+//           resetString,
+//           user.resetString
+//         );
+//         if (isStringValid) {
+//           const hashedNewPassword = await genPassword(newPassword);
+//           User.updateOne({ _id: userId }, { password: hashedNewPassword })
+//             .then(() => {
+//               passwordReset
+//                 .deleteOne({ userId })
+//                 .then(() => {
+//                   response.send({
+//                     message: "Password has been reset successfully",
+//                   });
+//                 })
+//                 .catch(() => {
+//                   console.log(
+//                     "error occured while deleteing password reset request record"
+//                   );
+//                   response.send({
+//                     message:
+//                       "error occured while deleteing password reset request record",
+//                   });
+//                 });
+//             })
+//             .catch(() => {
+//               console.log("error occured while updating password");
+//               response.send({
+//                 message: "error occured while updating password",
+//               });
+//             });
+//         } else {
+//           response.send({ message: "Reset String is not valid" });
+//         }
+//       } else {
+//         passwordReset.deleteOne({ userId }).then(() => {
+//           response.send({ message: "Password reset request expired" });
+//         });
+//       }
+//     } else {
+//       response.send({ message: "password reset request not found" });
+//     }
+//   } catch (error) {
+//     response.send({
+//       message: "Password reset request has expired",
+//     });
+//   }
+// }
+async function reset(request, response) {
+  const { newPassword } = request.body;
+  const { userId, resetString } = request.params;
+
+  const [user] = await passwordReset.find({ userId });
+  try {
+    const { expiresAt } = user;
+    const isLinkValid = expiresAt > Date.now();
+    if (user) {
+      if (isLinkValid) {
+        const isStringValid = await bcrypt.compare(
+          resetString,
+          user.resetString
+        );
+        if (isStringValid) {
+          const hashedNewPassword = await genPassword(newPassword);
+          User.updateOne({ _id: userId }, { password: hashedNewPassword })
+            .then(() => {
+              passwordReset
+                .deleteOne({ userId })
+                .then(() => {
+                  response.send({
+                    message: "Password has been reset successfully",
+                  });
+                })
+                .catch(() => {
+                  console.log(
+                    "error occured while deleteing password reset request record"
+                  );
+                  response.send({
+                    message:
+                      "error occured while deleteing password reset request record",
+                  });
+                });
+            })
+            .catch(() => {
+              console.log("error occured while updating password");
+              response.send({
+                message: "error occured while updating password",
+              });
+            });
+        } else {
+          response.send({ message: "Reset String is not valid" });
+        }
+      } else {
+        passwordReset.deleteOne({ userId }).then(() => {
+          response.send({ message: "Password reset request expired" });
+        });
+      }
+    } else {
+      response.send({ message: "password reset request not found" });
+    }
+  } catch (error) {
+    response.send({
+      message: "Password reset request has expired",
+    });
+  }
+}
+
+async function getUserData(request, response) {
+  response.send({ message: "User Data received" });
+}
+
+export { signup, login, logout, verify, requestReset, reset, getUserData };

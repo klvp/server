@@ -10,7 +10,10 @@ import {
   verify,
   requestReset,
   reset,
+  getUserData,
 } from "../controllers/user.js";
+
+import auth from "../middleware/auth.js";
 
 router.post(
   "/signup",
@@ -32,8 +35,11 @@ router.get("/verify/:userId/:uniqueString", verify);
 
 router.post("/requestPasswordReset", requestReset);
 
-router.post("/resetPassword", reset);
+// router.post("/resetPassword", reset);
+router.post("/resetPassword/:userId/:resetString", reset);
 
 router.get("/logout", logout);
+
+router.get("/data", auth, getUserData);
 
 export const usersRouter = router;
