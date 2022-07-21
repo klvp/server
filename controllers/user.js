@@ -51,7 +51,7 @@ async function signup(request, response) {
 const sendVerificationEmail = async ({ _id, email }, response) => {
   //URL to be used in Email
   console.log(_id, email);
-  const currentURL = "http://localhost:4000/";
+  const currentURL = "https://klvp-pizzadelivery.herokuapp.com/";
 
   const uniqueString = uuidv4() + _id;
 
